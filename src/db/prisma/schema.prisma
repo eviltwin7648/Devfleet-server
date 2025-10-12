@@ -1,0 +1,91 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           Int           @id @default(autoincrement())
+  email        String        @unique
+  name         String
+  password     String?
+  githubId     String?       @unique
+  avatarUrl    String?
+  authProvider String        @default("email") // "email" or "github"
+  createdAt    DateTime      @default(now())
+  agentapikeys AgentAPIKey[]
+  agents       Agent[]
+}
+
+model emailOtp {
+  id         Int      @id @default(autoincrement())
+  email      String   @unique
+  otp        String
+  expiresAt  DateTime
+  isVerified Boolean
+  createdAt  DateTime @default(now())
+}
+
+model Agent {
+  id       Int          @id @default(autoincrement())
+  hostname String       @unique
+  os       String
+  arch     String //cpu architecture
+  totalmem BigInt
+  lastSeen DateTime
+  isOnline Boolean      @default(true)
+  jobs     Job[]
+  apiKey   AgentAPIKey? @relation(fields: [apiKeyId], references: [id])
+  apiKeyId Int?         @unique // ensures 1-to-1 link between agent and API key
+  user     User         @relation(fields: [userId], references: [id])
+  userId   Int
+}
+
+model Job {
+  id          Int       @id @default(autoincrement())
+  agent       Agent?    @relation(fields: [agentId], references: [id])
+  title       String
+  description String?
+  agentId     Int?
+  script      String
+  env         Json?
+  status      String // pending, running, success, failed
+  exitCode    Int?
+  createdAt   DateTime  @default(now())
+  finishedAt  DateTime?
+  logs        Log[]
+}
+
+model Log {
+  id        Int      @id @default(autoincrement())
+  job       Job      @relation(fields: [jobId], references: [id])
+  jobId     Int
+  type      String // stdout, stderr, etc
+  message   String
+  createdAt DateTime @default(now())
+}
+
+model AgentAPIKey {
+  id        Int       @id @default(autoincrement())
+  user      User      @relation(fields: [userId], references: [id])
+  userId    Int
+  apiKey    String    @unique
+  isUsed    Boolean   @default(false)
+  usedAt    DateTime?
+  agent     Agent?    @relation
+  agentId   Int?      @unique
+  createdAt DateTime  @default(now())
+  revokedAt DateTime?
+  expiresAt DateTime
+  keyName   String?
+}

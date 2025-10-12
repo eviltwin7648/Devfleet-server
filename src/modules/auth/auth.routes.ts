@@ -13,4 +13,5 @@ router.get("/github", authController.githubAuth);
 router.get("/github/callback", authController.githubCallback);
 router.get("/me", authController.validateAuth);
 
+//generate api key
 export const authRoutes = router;

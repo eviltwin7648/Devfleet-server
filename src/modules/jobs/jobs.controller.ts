@@ -1,11 +1,42 @@
 import { Request, Response } from "express";
+import { db } from "../../db/db";
 
 const createJob = async (req: Request, res: Response) => {
   try {
     // Logic to create a job
     const { agentId, script, env, title, description } = req.body;
+
+    if (!agentId || !script || !title) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    console.log("Creating job with data:", req.body);
+
+    const job = await db.job.create({
+      data: {
+        title,
+        description: description || "",
+        agentId:1,
+        script,
+        env: env || {},
+        status: "pending", // Initial status
+        
+      },
+    });
+
+    if (!job) {
+      res.status(500).json({ error: "Failed to create job" });
+      return;
+    }
+
+
+    //TODO: will just assume job is to be run immediately, will need to handle scheduling later
+
+
+
     res.status(201).json({ message: "Job created successfully" });
   } catch (error) {
+    console.error("Error creating job:", error);
     res.status(500).json({ error: "Failed to create job" });
   }
 };
