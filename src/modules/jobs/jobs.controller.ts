@@ -17,7 +17,7 @@ const createJob = async (req: Request, res: Response) => {
     } = req.body;
     const userId = req.user?.id;
     if (!agentId || !script || !title) {
-      res.status(400).json({ error: "Missing required fields" });
+      res.status(400).json({ message: "Missing required fields" });
       return;
     }
     if (!userId) {
@@ -46,7 +46,7 @@ const createJob = async (req: Request, res: Response) => {
     });
 
     if (!job) {
-      res.status(500).json({ error: "Failed to create job" });
+      res.status(500).json({ message: "Failed to create job" });
       return;
     }
 
@@ -55,13 +55,14 @@ const createJob = async (req: Request, res: Response) => {
     res.status(201).json({ message: "Job created successfully" });
   } catch (error) {
     console.error("Error creating job:", error);
-    res.status(500).json({ error: "Failed to create job" });
+    res.status(500).json({ message: "Failed to create job" });
   }
 };
 
 const getJobs = async (req: Request, res: Response) => {
   try {
     const userId = req.user?.id;
+    // console.log("INSIFE getJobs COntroller")
     if (!userId) {
       res.status(401).json({
         error: "Unauthorized",
@@ -72,29 +73,36 @@ const getJobs = async (req: Request, res: Response) => {
       where: {
         userId,
       },
-      select: {
-        id: true,
-        title: true,
-        description: true,
-        exitCode: true,
-        scheduleAt: true,
+      // select: {
+      //   id: true,
+      //   title: true,
+      //   description: true,
+      //   exitCode: true,
+      //   scheduleAt: true,
 
-        agent: {
-          select: {
-            id: true,
-            hostname: true,
-            os: true,
-            arch: true,
-            totalmem: true,
-            lastSeen: true,
-            isOnline: true,
-          },
-        },
+        // agent: {
+        //   select: {
+        //     id: true,
+        //     hostname: true,
+        //     os: true,
+        //     arch: true,
+        //     totalmem: true,
+        //     lastSeen: true,
+        //     isOnline: true,
+        //   },
+        // },
       },
-    });
+    // }
+  );
+// jobs.forEach(j => {
+//   if (typeof j.agent?.totalmem === "bigint") {
+//     console.log("totalmem is BigInt");
+//   }
+// });
 
     res.status(200).json({ message: "Jobs Found", data: jobs });
   } catch (error) {
+    console.error("Error listing jobs:", error);
     res.status(500).json({ error: "Failed to list jobs" });
   }
 };
@@ -103,8 +111,32 @@ const getJob = async (req: Request, res: Response) => {
   try {
     const jobId = req.params.jobId;
     // Logic to get a specific job by jobId
-    res.status(200).json({ message: `Details of job ${jobId}` });
+    const job = await db.job.findUnique({
+      where: { id: jobId },
+      include: {
+        agent: {
+          select: {
+            id: true,
+            hostname: true,
+            os: true,
+          },
+        },
+        logs: {
+          orderBy: {
+            createdAt: "asc",
+          },
+        },
+      },
+    });
+
+    if (!job) {
+      res.status(404).json({ message: "Job not found" });
+      return;
+    }
+
+    res.status(200).json(job);
   } catch (error) {
+    console.error("Error getting job:", error);
     res.status(500).json({ error: "Failed to get job" });
   }
 };

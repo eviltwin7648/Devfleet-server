@@ -55,7 +55,7 @@ const register = async (req: Request, res: Response) => {
     });
     await db.agentAPIKey.update({
       where: { id: apiKeyRecord.id },
-      data: { usedAt: new Date(), isUsed: true },
+      data: { usedAt: new Date(), isUsed: true, agentId: agent.id },
     });
 
     res.status(200).json({
@@ -71,15 +71,22 @@ const register = async (req: Request, res: Response) => {
   }
 };
 
+import jwt from "jsonwebtoken";
+
 // Heartbeat: update agent's lastSeen
 const heartbeat = async (req: Request, res: Response) => {
   try {
-    const { agentId } = req.body;
+  //from agentAuth middleware
+    const agentId = req.agent?.id;
+    if (!agentId) {
+        res.status(401).json({ message: "Unauthorized" });
+        return;
+    }
     await db.agent.update({
       where: { id: agentId },
       data: { lastSeen: new Date() },
     });
-    console.log("HEARTBEAT RECEIVED", req.body)
+    console.log("HEARTBEAT RECEIVED from agent", agentId)
     res.status(200).json({ message: "Heartbeat received" });
   } catch (err) {
     res
@@ -92,16 +99,23 @@ const heartbeat = async (req: Request, res: Response) => {
 // Poll for jobs assigned to this agent
 const pullJobs = async (req: Request, res: Response) => {
   try {
-    const agent_id = req.query.agent_id as string;
+    //from agentAuth middleware
+    console.log("PULLING JOBS", req.agent)
+    const agentId = req.agent?.id;
+    if (!agentId) {
+        res.status(401).json({ message: "Unauthorized" });
+        return;
+    }
+    console.log("Polling jobs for Agent ID:", agentId)
     // Find a pending job for this agent
     const job = await db.job.findFirst({
-      where: { agentId: Number(agent_id), status: "pending" },
+      where: { agentId: agentId, status: "Pending" },
     });
     if (job) {
-      // Optionally mark as running
+      //  mark as running
       await db.job.update({
         where: { id: job.id },
-        data: { status: "running" },
+        data: { status: "Running" },
       });
       res.status(200).json({ job });
     } else {
@@ -130,14 +144,43 @@ const jobLogs = async (req: Request, res: Response) => {
 };
 
 // Receive job result from agent
+// Receive job result from agent
+// Receive job result from agent
 const jobResult = async (req: Request, res: Response) => {
   try {
     const { jobId } = req.params;
-    const { status, exit_code } = req.body;
+    const { status, exit_code, stdout, stderr } = req.body;
+    console.log("JOB RESULT RECEIVED", jobId, req.body);
+    
     await db.job.update({
-      where: { id: Number(jobId) },
-      data: { status, exitCode: exit_code, finishedAt: new Date() },
+      where: { id: jobId },
+      data: { 
+        status, 
+        exitCode: exit_code, 
+        finishedAt: new Date(),
+      },
     });
+
+    if(stdout) {
+        await db.log.create({
+            data: {
+                jobId: jobId,
+                type: "STDOUT",
+                message: stdout
+            }
+        });
+    }
+
+    if(stderr) {
+        await db.log.create({
+            data: {
+                jobId: jobId,
+                type: "STDERR",
+                message: stderr
+            }
+        });
+    }
+
     res.status(200).json({ message: "Job result received" });
   } catch (err) {
     res
@@ -150,9 +193,13 @@ const jobResult = async (req: Request, res: Response) => {
 // Shutdown: mark agent as offline
 const shutdown = async (req: Request, res: Response) => {
   try {
-    const { agent_id } = req.body;
+    const agentId = req.agent?.id;
+     if (!agentId) {
+        res.status(401).json({ message: "Unauthorized" });
+        return;
+    }
     await db.agent.update({
-      where: { id: agent_id },
+      where: { id: agentId },
       data: { isOnline: false, lastSeen: new Date() },
     });
     res.status(200).json({ message: "Agent shutdown successfully" });
@@ -258,23 +305,46 @@ const getUserAgents = async (req: Request, res: Response) => {
 
 const verifyAgent = async (req: Request, res: Response) => {
   try {
-    console.log("REQUEST RECEIVED", req.query)
-    const { apiKey } = req.query;
+    console.log("VERIFY REQUEST RECEIVED", req.body)
+    const { apiKey, hostname, os, arch } = req.body;
     if(!apiKey){
       res.status(400).json({ message: "Missing API Key" });
       return;
     }
+    
+    // Find the API key record
     const apiKeyRecord = await db.agentAPIKey.findFirst({
-      where: { apiKey },
+      where: { apiKey: apiKey as string },
+      include: { agent: true }
     });
+
     if (!apiKeyRecord) {
       res.status(400).json({ message: "Invalid API Key" });
       return;
     }
-    console.log("API Key verified successfully for agent", apiKeyRecord)
-    //should verify using the the apikey properly
-    //should send a jwt token to the agent
-    res.status(200).json({ message: "API Key verified successfully" });
+
+if(!apiKeyRecord.agent){
+  res.status(400).json({ message: "Agent not found" });
+  return;
+}
+    // Existing agent linked to key
+    const agent = apiKeyRecord.agent;
+    
+    // Validate match
+     if (agent.hostname !== hostname || agent.os !== os || agent.arch !== arch) {
+          res.status(400).json({ message: "Machine details mismatch with registered agent" });
+          console.error("Machine details mismatch during verify", { registered: agent, received: req.body });
+          return;
+    }
+
+    const token = jwt.sign(
+        { id: agent.id, hostname: agent.hostname },
+        process.env.JWT_SECRET || "default_secret",
+         { expiresIn: "10d" }
+    );
+
+    res.status(200).json({ message: "Verified", token });
+
   } catch (error) {
     res
       .status(500)
@@ -282,6 +352,7 @@ const verifyAgent = async (req: Request, res: Response) => {
     console.error(error);
   }
 };
+
 
 export const agentController = {
   register,
@@ -292,5 +363,6 @@ export const agentController = {
   shutdown,
   createApiKey,
   getUserAgents,
-  verifyAgent
+  verifyAgent,
+  // pollJobs
 };

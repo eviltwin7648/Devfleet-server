@@ -1,20 +1,24 @@
 import { Router } from "express";
 import { userAuth } from "../../middleware/userAuth";
+import { agentAuth } from "../../middleware/agentAuth";
 import { agentController } from "./agent.controller";
 
 const router = Router();
 
 router.post("/register", agentController.register);
-router.get("/verify", agentController.verifyAgent);
-router.post("/heartbeat", agentController.heartbeat);
-router.get("/jobs/pull", agentController.pullJobs);
-router.post("/job/:jobId/logs", agentController.jobLogs);
-router.post("/job/:jobId/result", agentController.jobResult);
-router.post("/shutdown", agentController.shutdown);
-
+router.post("/verify", agentController.verifyAgent);
+router.post("/heartbeat", agentAuth, agentController.heartbeat);
+router.get("/jobs/pull", agentAuth, agentController.pullJobs); 
+router.post("/job/:jobId/logs", agentAuth, agentController.jobLogs);
+router.post("/job/:jobId/result", agentAuth, agentController.jobResult);
+router.post("/shutdown", agentAuth, agentController.shutdown);
 //api key
 router.get("/api-key", userAuth, agentController.createApiKey);
 
 //dashboard
 router.get("/my-agents", userAuth, agentController.getUserAgents);
+
+
+
 export const agentRoutes = router;
+

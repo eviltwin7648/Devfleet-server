@@ -1,43 +1,40 @@
-import type { NextFunction, Request, Response } from "express";
-import { db } from "../db/db";
+import { Request, Response, NextFunction } from "express";
+import jwt from "jsonwebtoken";
 
-export const agentAuth = async (req: Request, res: Response, next: NextFunction) => {
-    try {
-        const header = req.headers.authorization;
-        if (!header?.startsWith("ApiKey ")) {
-            res.status(401).json({
-                message: "Missing or Invalid API Key header",
-            });
-            return;
-        }
-        const apiKey = header.split(" ")[1];
-        const keyRecord = await db.agentAPIKey.findUnique({
-            where: {
-                apiKey,
-            },
-            include: { agent: true },
-        });
+interface AgentPayload {
+  id: number;
+  hostname: string;
+}
 
-        if (!keyRecord || keyRecord.revokedAt || !keyRecord.usedAt) {
-            res.status(403).json({ message: "Invalid or Revoked API key" });
-            return;
-        }
-        const isExpired = keyRecord.expiresAt ? keyRecord.expiresAt < new Date() : false;
-        if (isExpired) {
-            res.status(403).json({ message: "API key expired" });
-            return;
-        }
-
-        if (!keyRecord.agent || !keyRecord.agent.isOnline) {
-            res.status(403).json({ message: "Agent offline or not registered" });
-            return;
-        }
-
-        req.agent = keyRecord.agent;
-        req.apiKeyRecord = keyRecord;
-        next();
-    } catch (error) {
-        res.json({ message: "Error While Authorization", error: String(error) });
-        throw new Error(String(error));
+declare global {
+  namespace Express {
+    interface Request {
+      agent?: AgentPayload;
     }
+  }
+}
+
+export const agentAuth = (req: Request, res: Response, next: NextFunction) => {
+  const token = req.headers.authorization?.split(" ")[1];
+
+  if (!token) {
+    res.status(401).json({ message: "Authentication required" });
+    return; 
+  }
+
+  try {
+    const decoded = jwt.verify(
+      token,
+      process.env.JWT_SECRET || "default_secret"
+    ) as AgentPayload;
+    if (!decoded.id || !decoded.hostname) {
+        res.status(403).json({ message: "Invalid Token Payload" });   
+        return
+    }
+    req.agent = decoded;
+    next();
+  } catch (err) {
+    res.status(403).json({ message: "Invalid or expired token" });
+    return
+  }
 };
