@@ -1,9 +1,10 @@
 import { Request, Response } from "express";
 import { db } from "../../db/db";
+import { JobScheduler } from "./job.scheduler";
 
 const createJob = async (req: Request, res: Response) => {
   try {
-    // Logic to create a job
+    // Logic to create a job definition and execution
     const {
       agentId,
       script,
@@ -14,9 +15,11 @@ const createJob = async (req: Request, res: Response) => {
       repeatCron,
       tags,
       isRecurring,
+      maxRetries,
+      timeoutSec,
     } = req.body;
     const userId = req.user?.id;
-    if (!agentId || !script || !title) {
+    if (!script || !title) {
       res.status(400).json({ message: "Missing required fields" });
       return;
     }
@@ -29,30 +32,42 @@ const createJob = async (req: Request, res: Response) => {
 
     console.log("Creating job with data:", req.body);
 
-    const job = await db.job.create({
+    // Create JobDefinition
+    const jobDefinition = await db.jobDefinition.create({
       data: {
         title,
         description: description || "",
-        agentId,
         script,
         env: env || {},
-        status: "Pending",
         userId: userId,
-        scheduleAt,
-        repeatCron,
-        isRecurring,
-        tags,
+        scheduleAt: scheduleAt ? new Date(scheduleAt) : null,
+        repeatCron: repeatCron || null,
+        isRecurring: isRecurring || false,
+        tags: tags || {},
+        maxRetries: maxRetries || 3,
+        timeoutSec: timeoutSec || null,
       },
     });
 
-    if (!job) {
-      res.status(500).json({ message: "Failed to create job" });
+    if (!jobDefinition) {
+      res.status(500).json({ message: "Failed to create job definition" });
       return;
     }
 
-    //TODO: will just assume job is to be run immediately, will need to handle scheduling later
+    // Schedule the job using BullMQ
+    const queueJobId = await JobScheduler.scheduleJob({
+      jobDefinitionId: jobDefinition.id,
+      agentId: agentId || undefined,
+      scheduleAt: scheduleAt ? new Date(scheduleAt) : undefined,
+      repeatCron: repeatCron || null,
+      isRecurring: isRecurring || false,
+    });
 
-    res.status(201).json({ message: "Job created successfully" });
+    res.status(201).json({ 
+      message: "Job created and scheduled successfully",
+      jobId: jobDefinition.id,
+      queueJobId,
+    });
   } catch (error) {
     console.error("Error creating job:", error);
     res.status(500).json({ message: "Failed to create job" });
@@ -62,45 +77,39 @@ const createJob = async (req: Request, res: Response) => {
 const getJobs = async (req: Request, res: Response) => {
   try {
     const userId = req.user?.id;
-    // console.log("INSIFE getJobs COntroller")
     if (!userId) {
       res.status(401).json({
         error: "Unauthorized",
       });
       return;
     }
-    const jobs = await db.job.findMany({
+    
+    // Query JobExecutions with related JobDefinition and Agent
+    const executions = await db.jobExecution.findMany({
       where: {
-        userId,
+        job: {
+          userId,
+        },
       },
-      // select: {
-      //   id: true,
-      //   title: true,
-      //   description: true,
-      //   exitCode: true,
-      //   scheduleAt: true,
-
-        // agent: {
-        //   select: {
-        //     id: true,
-        //     hostname: true,
-        //     os: true,
-        //     arch: true,
-        //     totalmem: true,
-        //     lastSeen: true,
-        //     isOnline: true,
-        //   },
-        // },
+      include: {
+        job: true,
+        agent: {
+          select: {
+            id: true,
+            hostname: true,
+            os: true,
+            arch: true,
+            isOnline: true,
+            lastSeen: true,
+          },
+        },
       },
-    // }
-  );
-// jobs.forEach(j => {
-//   if (typeof j.agent?.totalmem === "bigint") {
-//     console.log("totalmem is BigInt");
-//   }
-// });
+      orderBy: {
+        createdAt: "desc",
+      },
+    });
 
-    res.status(200).json({ message: "Jobs Found", data: jobs });
+    res.status(200).json({ message: "Jobs Found", data: executions });
   } catch (error) {
     console.error("Error listing jobs:", error);
     res.status(500).json({ error: "Failed to list jobs" });
@@ -109,11 +118,13 @@ const getJobs = async (req: Request, res: Response) => {
 
 const getJob = async (req: Request, res: Response) => {
   try {
-    const jobId = req.params.jobId;
-    // Logic to get a specific job by jobId
-    const job = await db.job.findUnique({
-      where: { id: jobId },
+    const executionId = req.params.jobId;
+    
+    // Fetch JobExecution with related data
+    const execution = await db.jobExecution.findUnique({
+      where: { id: executionId },
       include: {
+        job: true,
         agent: {
           select: {
             id: true,
@@ -129,12 +140,12 @@ const getJob = async (req: Request, res: Response) => {
       },
     });
 
-    if (!job) {
-      res.status(404).json({ message: "Job not found" });
+    if (!execution) {
+      res.status(404).json({ message: "Job execution not found" });
       return;
     }
 
-    res.status(200).json(job);
+    res.status(200).json(execution);
   } catch (error) {
     console.error("Error getting job:", error);
     res.status(500).json({ error: "Failed to get job" });
@@ -144,7 +155,14 @@ const getJob = async (req: Request, res: Response) => {
 const updateJob = async (req: Request, res: Response) => {
   try {
     const jobId = req.params.jobId;
-    // Logic to update a specific job by jobId
+    const updateData = req.body;
+    
+    // Update JobDefinition
+    await db.jobDefinition.update({
+      where: { id: jobId },
+      data: updateData,
+    });
+    
     res.status(200).json({ message: `Job ${jobId} updated successfully` });
   } catch (error) {
     res.status(500).json({ error: "Failed to update job" });
@@ -154,7 +172,12 @@ const updateJob = async (req: Request, res: Response) => {
 const deleteJob = async (req: Request, res: Response) => {
   try {
     const jobId = req.params.jobId;
-    // Logic to delete a specific job by jobId
+    
+    // Delete JobDefinition (will cascade to JobExecutions and Logs)
+    await db.jobDefinition.delete({
+      where: { id: jobId },
+    });
+    
     res.status(200).json({ message: `Job ${jobId} deleted successfully` });
   } catch (error) {
     res.status(500).json({ error: "Failed to delete job" });

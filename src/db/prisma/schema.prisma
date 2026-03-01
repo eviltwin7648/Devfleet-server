@@ -15,17 +15,17 @@ datasource db {
 }
 
 model User {
-  id           String        @id @default(uuid())
-  email        String        @unique
-  name         String
-  password     String?
-  githubId     String?       @unique
-  avatarUrl    String?
-  authProvider String        @default("email") // "email" or "github"
-  createdAt    DateTime      @default(now())
-  agentapikeys AgentAPIKey[]
-  agents       Agent[]
-  jobs         Job[]
+  id             String          @id @default(uuid())
+  email          String          @unique
+  name           String
+  password       String?
+  githubId       String?         @unique
+  avatarUrl      String?
+  authProvider   String          @default("email") // "email" or "github"
+  createdAt      DateTime        @default(now())
+  agentapikeys   AgentAPIKey[]
+  agents         Agent[]
+  jobDefinitions JobDefinition[]
 }
 
 model emailOtp {
@@ -38,53 +38,72 @@ model emailOtp {
 }
 
 model Agent {
-  id          String        @id @default(uuid())
-  hostname    String        @unique
-  os          String
-  arch        String //cpu architecture
-  totalmem    BigInt
-  lastSeen    DateTime
-  isOnline    Boolean       @default(true)
-  jobs        Job[]
-  apiKey      AgentAPIKey?  @relation(fields: [apiKeyId], references: [id])
-  apiKeyId    String?       @unique // ensures 1-to-1 link between agent and API key
-  user        User          @relation(fields: [userId], references: [id])
-  userId      String
-  agentHealth AgentHealth[]
+  id            String          @id @default(uuid())
+  hostname      String          @unique
+  os            String
+  arch          String          //cpu architecture
+  totalmem      BigInt
+  lastSeen      DateTime
+  isOnline      Boolean         @default(true)
+  jobExecutions JobExecution[]
+  apiKey        AgentAPIKey?    @relation(fields: [apiKeyId], references: [id])
+  apiKeyId      String?         @unique // ensures 1-to-1 link between agent and API key
+  user          User            @relation(fields: [userId], references: [id])
+  userId        String
+  agentHealth   AgentHealth[]
 }
 
-model Job {
-  id          String    @id @default(uuid())
-  agent       Agent?    @relation(fields: [agentId], references: [id])
-  title       String
-  description String?
-  agentId     String?
-  script      String
-  env         Json?
-  status      jobStatus @default(Pending)
-  exitCode    Int?
-  createdAt   DateTime  @default(now())
-  finishedAt  DateTime?
-  logs        Log[]
-  user        User      @relation(fields: [userId], references: [id])
-  userId      String
-  scheduleAt  DateTime? // For delayed jobs
-  repeatCron  String? // For recurring jobs (e.g. cron expression)
-  isRecurring Boolean   @default(false)
-  retries     Int       @default(0)
-  maxRetries  Int       @default(3)
-  timeoutSec  Int? // Optional: kill long-running jobs
-  tags        Json?
+model JobDefinition {
+  id            String         @id @default(uuid())
+  title         String
+  description   String?
+  script        String
+  env           Json?
+  scheduleAt    DateTime?
+  repeatCron    String?
+  isRecurring   Boolean
+  maxRetries    Int
+  timeoutSec    Int?
+  tags          Json?
+  userId        String
+  user          User           @relation(fields: [userId], references: [id])
+  executions    JobExecution[]
+  createdAt     DateTime       @default(now())
 }
+
+
+model JobExecution {
+  id            String   @id @default(uuid())
+  jobId         String
+  job           JobDefinition @relation(fields: [jobId], references: [id])
+
+  agentId       String?
+  agent         Agent?  @relation(fields: [agentId], references: [id])
+
+  attempt       Int
+  status        ExecutionStatus
+  exitCode      Int?
+  failureType   FailureType?
+
+  scheduledAt   DateTime
+  startedAt     DateTime?
+  finishedAt    DateTime?
+
+  logs          Log[]
+
+  createdAt     DateTime @default(now())
+}
+
 
 model Log {
-  id        String   @id @default(uuid())
-  job       Job      @relation(fields: [jobId], references: [id])
-  jobId     String
-  type      LogType
-  message   String
-  createdAt DateTime @default(now())
+  id           String   @id @default(uuid())
+  execution    JobExecution @relation(fields: [executionId], references: [id])
+  executionId  String
+  type         LogType
+  message      String
+  createdAt    DateTime @default(now())
 }
+
 
 model AgentAPIKey {
   id        String    @id @default(uuid())
@@ -111,12 +130,23 @@ model AgentHealth {
   timestamp DateTime @default(now())
 }
 
-enum jobStatus {
-  Success
-  Failure
-  Pending
-  Running
+enum ExecutionStatus {
+  CREATED
+  DISPATCHED
+  RUNNING
+  SUCCESS
+  FAILED
+  TIMEOUT
+  CANCELLED
+  LOST
 }
+
+enum FailureType {
+  USER_ERROR
+  AGENT_ERROR
+  SYSTEM_ERROR
+}
+
 
 enum LogType {
   STDOUT

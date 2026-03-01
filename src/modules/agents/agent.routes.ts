@@ -9,8 +9,8 @@ router.post("/register", agentController.register);
 router.post("/verify", agentController.verifyAgent);
 router.post("/heartbeat", agentAuth, agentController.heartbeat);
 router.get("/jobs/pull", agentAuth, agentController.pullJobs); 
-router.post("/job/:jobId/logs", agentAuth, agentController.jobLogs);
-router.post("/job/:jobId/result", agentAuth, agentController.jobResult);
+router.post("/execution/:executionId/logs", agentAuth, agentController.jobLogs);
+router.post("/execution/:executionId/result", agentAuth, agentController.jobResult);
 router.post("/shutdown", agentAuth, agentController.shutdown);
 //api key
 router.get("/api-key", userAuth, agentController.createApiKey);

@@ -96,7 +96,7 @@ const heartbeat = async (req: Request, res: Response) => {
   }
 };
 
-// Poll for jobs assigned to this agent
+// Poll for jobs assigned to this agent (with long-polling support)
 const pullJobs = async (req: Request, res: Response) => {
   try {
     //from agentAuth middleware
@@ -107,18 +107,102 @@ const pullJobs = async (req: Request, res: Response) => {
         return;
     }
     console.log("Polling jobs for Agent ID:", agentId)
-    // Find a pending job for this agent
-    const job = await db.job.findFirst({
-      where: { agentId: agentId, status: "Pending" },
-    });
-    if (job) {
-      //  mark as running
-      await db.job.update({
-        where: { id: job.id },
-        data: { status: "Running" },
+    
+    // Check if this is a long-poll request (header or query param)
+    const enableLongPoll = req.query.longPoll === "true" || req.headers["x-long-poll"] === "true";
+    
+    // Helper function to find and claim a job
+    const findAndClaimJob = async () => {
+      // First, try to find a job already DISPATCHED to this agent
+      let execution = await db.jobExecution.findFirst({
+        where: { 
+          agentId: agentId, 
+          status: "DISPATCHED" 
+        },
+        include: {
+          job: true,
+        },
       });
-      res.status(200).json({ job });
+      
+      // If no dispatched job, try to claim a CREATED job (unassigned)
+      if (!execution) {
+        execution = await db.jobExecution.findFirst({
+          where: {
+            status: "CREATED",
+            agentId: null, // Not assigned to any agent yet
+          },
+          include: {
+            job: true,
+          },
+          orderBy: {
+            scheduledAt: "asc", // Process oldest first
+          },
+        });
+
+        // Claim the job by assigning it to this agent
+        if (execution) {
+          execution = await db.jobExecution.update({
+            where: { id: execution.id },
+            data: {
+              agentId: agentId,
+              status: "DISPATCHED",
+            },
+            include: {
+              job: true,
+            },
+          });
+          console.log(`✅ Agent ${agentId} claimed job ${execution.id}`);
+        }
+      }
+      
+      return execution;
+    };
+
+    // Try to find a job immediately
+    let execution = await findAndClaimJob();
+    
+    if (execution) {
+      // Job found - mark as running and return
+      await db.jobExecution.update({
+        where: { id: execution.id },
+        data: { 
+          status: "RUNNING",
+          startedAt: new Date(),
+        },
+      });
+      res.status(200).json({ job: execution });
+    } else if (enableLongPoll) {
+      // No job available, but long-polling enabled - wait for a job
+      console.log(`⏳ Agent ${agentId} entering long-poll mode`);
+      
+      const { LongPollManager } = await import("./longPollManager");
+      
+      // Wait for a job event (30 second timeout)
+      const jobEvent = await LongPollManager.waitForJob(agentId, 30000);
+      
+      if (jobEvent) {
+        // Job became available during wait - try to claim it
+        execution = await findAndClaimJob();
+        
+        if (execution) {
+          await db.jobExecution.update({
+            where: { id: execution.id },
+            data: { 
+              status: "RUNNING",
+              startedAt: new Date(),
+            },
+          });
+          res.status(200).json({ job: execution });
+        } else {
+          // Race condition - another agent claimed it
+          res.status(200).json({ job: null });
+        }
+      } else {
+        // Timeout - no job available
+        res.status(200).json({ job: null });
+      }
     } else {
+      // No job and long-polling disabled (backward compatible)
       res.status(200).json({ job: null });
     }
   } catch (err) {
@@ -129,13 +213,20 @@ const pullJobs = async (req: Request, res: Response) => {
   }
 };
 
+
 // Receive job logs from agent
 const jobLogs = async (req: Request, res: Response) => {
   try {
-    const { jobId } = req.params;
+    const { executionId } = req.params;
     const { type, message } = req.body;
     // Save log to DB (or file, or forward to logging service)
-    await db.log.create({ data: { jobId: Number(jobId), type, message } });
+    await db.log.create({ 
+      data: { 
+        executionId: executionId, 
+        type, 
+        message 
+      } 
+    });
     res.status(200).json({ message: "Log received" });
   } catch (err) {
     res.status(500).json({ message: "Failed to save log", error: String(err) });
@@ -144,18 +235,17 @@ const jobLogs = async (req: Request, res: Response) => {
 };
 
 // Receive job result from agent
-// Receive job result from agent
-// Receive job result from agent
 const jobResult = async (req: Request, res: Response) => {
   try {
-    const { jobId } = req.params;
+    const { executionId } = req.params;
     const { status, exit_code, stdout, stderr } = req.body;
-    console.log("JOB RESULT RECEIVED", jobId, req.body);
+    console.log("JOB RESULT RECEIVED", executionId, req.body);
     
-    await db.job.update({
-      where: { id: jobId },
+    // Update JobExecution with result
+    await db.jobExecution.update({
+      where: { id: executionId },
       data: { 
-        status, 
+        status: status.toUpperCase(), // Ensure uppercase to match enum
         exitCode: exit_code, 
         finishedAt: new Date(),
       },
@@ -164,7 +254,7 @@ const jobResult = async (req: Request, res: Response) => {
     if(stdout) {
         await db.log.create({
             data: {
-                jobId: jobId,
+                executionId: executionId,
                 type: "STDOUT",
                 message: stdout
             }
@@ -174,7 +264,7 @@ const jobResult = async (req: Request, res: Response) => {
     if(stderr) {
         await db.log.create({
             data: {
-                jobId: jobId,
+                executionId: executionId,
                 type: "STDERR",
                 message: stderr
             }

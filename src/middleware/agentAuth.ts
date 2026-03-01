@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 
 interface AgentPayload {
-  id: number;
+  id: string;
   hostname: string;
 }
 
