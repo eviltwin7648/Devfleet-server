@@ -1,5 +1,3 @@
-import { JobDispatcher, JobEvent } from "../../lib/jobDispatcher";
-
 interface LongPollRequest {
   agentId: string;
   resolve: (job: any) => void;
@@ -19,7 +17,7 @@ export class LongPollManager {
    */
   static async waitForJob(
     agentId: string,
-    timeoutMs: number = 30000
+    timeoutMs: number = 30000,
   ): Promise<any> {
     // Cancel any existing long-poll for this agent
     this.cancelRequest(agentId);
@@ -48,7 +46,7 @@ export class LongPollManager {
    */
   static notifyAgent(agentId: string, job: any): boolean {
     const request = this.activeRequests.get(agentId);
-    
+
     if (request) {
       clearTimeout(request.timeout);
       this.activeRequests.delete(agentId);
@@ -56,7 +54,7 @@ export class LongPollManager {
       console.log(`✅ Notified agent ${agentId} about job ${job.id}`);
       return true;
     }
-    
+
     return false;
   }
 
@@ -66,21 +64,23 @@ export class LongPollManager {
    */
   static notifyAll(job: any): void {
     const waitingCount = this.activeRequests.size;
-    
+
     if (waitingCount === 0) {
       console.log(`ℹ️ Job ${job.id} created, but no agents waiting`);
       return;
     }
 
-    console.log(`📢 Broadcasting job ${job.id} to ${waitingCount} waiting agents`);
-    
+    console.log(
+      `📢 Broadcasting job ${job.id} to ${waitingCount} waiting agents`,
+    );
+
     // Wake up all waiting agents
     // They will race to claim the job in the database
     this.activeRequests.forEach((request) => {
       clearTimeout(request.timeout);
       request.resolve({ newJobAvailable: true });
     });
-    
+
     this.activeRequests.clear();
   }
 
@@ -89,7 +89,7 @@ export class LongPollManager {
    */
   static cancelRequest(agentId: string): void {
     const request = this.activeRequests.get(agentId);
-    
+
     if (request) {
       clearTimeout(request.timeout);
       this.activeRequests.delete(agentId);

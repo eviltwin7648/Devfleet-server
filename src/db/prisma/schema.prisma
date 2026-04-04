@@ -89,19 +89,23 @@ model JobExecution {
   startedAt     DateTime?
   finishedAt    DateTime?
 
-  logs          Log[]
+  logs          LogChunk[]
 
   createdAt     DateTime @default(now())
 }
 
 
-model Log {
+
+model LogChunk {
   id           String   @id @default(uuid())
   execution    JobExecution @relation(fields: [executionId], references: [id])
   executionId  String
+  batchSeq     Int
+  seq          Int
   type         LogType
-  message      String
+  content      String
   createdAt    DateTime @default(now())
+  @@unique([executionId, seq])
 }
 
 
@@ -132,6 +136,7 @@ model AgentHealth {
 
 enum ExecutionStatus {
   CREATED
+  READY
   DISPATCHED
   RUNNING
   SUCCESS

@@ -73,20 +73,34 @@ const register = async (req: Request, res: Response) => {
 
 import jwt from "jsonwebtoken";
 
-// Heartbeat: update agent's lastSeen
+// Heartbeat: update agent's lastSeen and record health
 const heartbeat = async (req: Request, res: Response) => {
   try {
-  //from agentAuth middleware
     const agentId = req.agent?.id;
     if (!agentId) {
-        res.status(401).json({ message: "Unauthorized" });
-        return;
+      res.status(401).json({ message: "Unauthorized" });
+      return;
     }
+
+    const { health } = req.body;
+
     await db.agent.update({
       where: { id: agentId },
-      data: { lastSeen: new Date() },
+      data: { lastSeen: new Date(), isOnline: true },
     });
-    console.log("HEARTBEAT RECEIVED from agent", agentId)
+
+    if (health) {
+      await db.agentHealth.create({
+        data: {
+          agentId,
+          cpuUsage: health.cpuUsage || 0,
+          memUsage: health.memUsage || 0,
+          diskUsage: health.diskUsage || 0,
+        },
+      });
+    }
+
+    console.log("HEARTBEAT RECEIVED from agent", agentId);
     res.status(200).json({ message: "Heartbeat received" });
   } catch (err) {
     res
@@ -97,139 +111,87 @@ const heartbeat = async (req: Request, res: Response) => {
 };
 
 // Poll for jobs assigned to this agent (with long-polling support)
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 const pullJobs = async (req: Request, res: Response) => {
   try {
-    //from agentAuth middleware
-    console.log("PULLING JOBS", req.agent)
     const agentId = req.agent?.id;
     if (!agentId) {
-        res.status(401).json({ message: "Unauthorized" });
-        return;
+      return res.status(401).json({ message: "Unauthorized" });
     }
-    console.log("Polling jobs for Agent ID:", agentId)
-    
-    // Check if this is a long-poll request (header or query param)
-    const enableLongPoll = req.query.longPoll === "true" || req.headers["x-long-poll"] === "true";
-    
-    // Helper function to find and claim a job
-    const findAndClaimJob = async () => {
-      // First, try to find a job already DISPATCHED to this agent
-      let execution = await db.jobExecution.findFirst({
-        where: { 
-          agentId: agentId, 
-          status: "DISPATCHED" 
-        },
-        include: {
-          job: true,
-        },
-      });
-      
-      // If no dispatched job, try to claim a CREATED job (unassigned)
-      if (!execution) {
-        execution = await db.jobExecution.findFirst({
-          where: {
-            status: "CREATED",
-            agentId: null, // Not assigned to any agent yet
-          },
-          include: {
-            job: true,
-          },
-          orderBy: {
-            scheduledAt: "asc", // Process oldest first
-          },
-        });
 
-        // Claim the job by assigning it to this agent
-        if (execution) {
-          execution = await db.jobExecution.update({
-            where: { id: execution.id },
-            data: {
-              agentId: agentId,
-              status: "DISPATCHED",
-            },
-            include: {
-              job: true,
-            },
-          });
-          console.log(`✅ Agent ${agentId} claimed job ${execution.id}`);
-        }
-      }
-      
-      return execution;
+    const findAndClaimJob = async () => {
+      return db.$transaction(async (tx) => {
+        const execution = await tx.$queryRaw<any[]>`
+          SELECT *
+          FROM "JobExecution"
+          WHERE status = 'READY'
+          AND (
+            "agentId" = ${agentId}
+            OR "agentId" IS NULL
+          )
+          ORDER BY
+            CASE WHEN "agentId" = ${agentId} THEN 0 ELSE 1 END,
+            "scheduledAt"
+          FOR UPDATE SKIP LOCKED
+          LIMIT 1
+        `;
+
+        if (!execution.length) return null;
+
+        return tx.jobExecution.update({
+          where: { id: execution[0].id },
+          data: {
+            status: "DISPATCHED",
+            agentId: agentId,
+          },
+          include: { job: true },
+        });
+      });
     };
 
-    // Try to find a job immediately
-    let execution = await findAndClaimJob();
-    
-    if (execution) {
-      // Job found - mark as running and return
-      await db.jobExecution.update({
-        where: { id: execution.id },
-        data: { 
-          status: "RUNNING",
-          startedAt: new Date(),
-        },
-      });
-      res.status(200).json({ job: execution });
-    } else if (enableLongPoll) {
-      // No job available, but long-polling enabled - wait for a job
-      console.log(`⏳ Agent ${agentId} entering long-poll mode`);
-      
-      const { LongPollManager } = await import("./longPollManager");
-      
-      // Wait for a job event (30 second timeout)
-      const jobEvent = await LongPollManager.waitForJob(agentId, 30000);
-      
-      if (jobEvent) {
-        // Job became available during wait - try to claim it
-        execution = await findAndClaimJob();
-        
-        if (execution) {
-          await db.jobExecution.update({
-            where: { id: execution.id },
-            data: { 
-              status: "RUNNING",
-              startedAt: new Date(),
-            },
-          });
-          res.status(200).json({ job: execution });
-        } else {
-          // Race condition - another agent claimed it
-          res.status(200).json({ job: null });
-        }
-      } else {
-        // Timeout - no job available
-        res.status(200).json({ job: null });
+    const timeout = 30000;
+    const start = Date.now();
+
+    while (Date.now() - start < timeout) {
+      if (req.destroyed) return;
+
+      const execution = await findAndClaimJob();
+
+      if (execution) {
+        return res.status(200).json({ job: execution });
       }
-    } else {
-      // No job and long-polling disabled (backward compatible)
-      res.status(200).json({ job: null });
+
+      await sleep(800 + Math.random() * 400);
     }
+
+    return res.status(200).json({ job: null });
   } catch (err) {
-    res
-      .status(500)
-      .json({ message: "Failed to pull jobs", error: String(err) });
     console.error(err);
+    return res.status(500).json({
+      message: "Failed to pull jobs",
+      error: String(err),
+    });
   }
 };
 
+import { broadcastLogs } from "../../lib/ws";
+import { LogIngestor } from "../logs/logIngestion.Service";
 
-// Receive job logs from agent
+// Receive job logs from agent (batch support)
 const jobLogs = async (req: Request, res: Response) => {
   try {
     const { executionId } = req.params;
-    const { type, message } = req.body;
-    // Save log to DB (or file, or forward to logging service)
-    await db.log.create({ 
-      data: { 
-        executionId: executionId, 
-        type, 
-        message 
-      } 
-    });
-    res.status(200).json({ message: "Log received" });
+    const logBatch = req.body;
+    LogIngestor.storeLogChunk(logBatch, executionId);
+    // Support either single log { type, message } or batch { logs: [{type, message}] }
+    // LOGingestion service will handle it.
+
+    res.status(200).json({ message: "Logs received" });
   } catch (err) {
-    res.status(500).json({ message: "Failed to save log", error: String(err) });
+    res
+      .status(500)
+      .json({ message: "Failed to save logs", error: String(err) });
     console.error(err);
   }
 };
@@ -240,35 +202,53 @@ const jobResult = async (req: Request, res: Response) => {
     const { executionId } = req.params;
     const { status, exit_code, stdout, stderr } = req.body;
     console.log("JOB RESULT RECEIVED", executionId, req.body);
-    
+
     // Update JobExecution with result
-    await db.jobExecution.update({
+    const execution = await db.jobExecution.update({
       where: { id: executionId },
-      data: { 
+      data: {
         status: status.toUpperCase(), // Ensure uppercase to match enum
-        exitCode: exit_code, 
+        exitCode: exit_code,
         finishedAt: new Date(),
       },
+      include: { job: true },
     });
 
-    if(stdout) {
-        await db.log.create({
-            data: {
-                executionId: executionId,
-                type: "STDOUT",
-                message: stdout
-            }
+    // Handle Retries
+    if (execution.status === "FAILED" || execution.status === "TIMEOUT") {
+      if (execution.attempt < execution.job.maxRetries) {
+        console.log(
+          `🔄 Retrying job ${execution.jobId} (Attempt ${execution.attempt + 1}/${execution.job.maxRetries})`,
+        );
+        const delayMs = 2000 * Math.pow(2, execution.attempt - 1);
+        const { JobScheduler } = await import("../jobs/job.scheduler");
+        await JobScheduler.scheduleJob({
+          jobDefinitionId: execution.jobId,
+          agentId: execution.agentId || undefined,
+          attempt: execution.attempt + 1,
+          delayMs: delayMs,
         });
+      }
     }
 
-    if(stderr) {
-        await db.log.create({
-            data: {
-                executionId: executionId,
-                type: "STDERR",
-                message: stderr
-            }
-        });
+    if (stdout) {
+      await db.log.create({
+        data: {
+          executionId: executionId,
+          type: "STDOUT",
+          message: stdout,
+        },
+      });
+    }
+
+    if (stderr) {
+      await db.log.create({
+        data: {
+          executionId: executionId,
+          type: "STDERR",
+          message: stderr,
+        },
+      });
     }
 
     res.status(200).json({ message: "Job result received" });
@@ -284,9 +264,9 @@ const jobResult = async (req: Request, res: Response) => {
 const shutdown = async (req: Request, res: Response) => {
   try {
     const agentId = req.agent?.id;
-     if (!agentId) {
-        res.status(401).json({ message: "Unauthorized" });
-        return;
+    if (!agentId) {
+      res.status(401).json({ message: "Unauthorized" });
+      return;
     }
     await db.agent.update({
       where: { id: agentId },
@@ -395,17 +375,17 @@ const getUserAgents = async (req: Request, res: Response) => {
 
 const verifyAgent = async (req: Request, res: Response) => {
   try {
-    console.log("VERIFY REQUEST RECEIVED", req.body)
+    console.log("VERIFY REQUEST RECEIVED", req.body);
     const { apiKey, hostname, os, arch } = req.body;
-    if(!apiKey){
+    if (!apiKey) {
       res.status(400).json({ message: "Missing API Key" });
       return;
     }
-    
+
     // Find the API key record
     const apiKeyRecord = await db.agentAPIKey.findFirst({
       where: { apiKey: apiKey as string },
-      include: { agent: true }
+      include: { agent: true },
     });
 
     if (!apiKeyRecord) {
@@ -413,28 +393,32 @@ const verifyAgent = async (req: Request, res: Response) => {
       return;
     }
 
-if(!apiKeyRecord.agent){
-  res.status(400).json({ message: "Agent not found" });
-  return;
-}
+    if (!apiKeyRecord.agent) {
+      res.status(400).json({ message: "Agent not found" });
+      return;
+    }
     // Existing agent linked to key
     const agent = apiKeyRecord.agent;
-    
+
     // Validate match
-     if (agent.hostname !== hostname || agent.os !== os || agent.arch !== arch) {
-          res.status(400).json({ message: "Machine details mismatch with registered agent" });
-          console.error("Machine details mismatch during verify", { registered: agent, received: req.body });
-          return;
+    if (agent.hostname !== hostname || agent.os !== os || agent.arch !== arch) {
+      res
+        .status(400)
+        .json({ message: "Machine details mismatch with registered agent" });
+      console.error("Machine details mismatch during verify", {
+        registered: agent,
+        received: req.body,
+      });
+      return;
     }
 
     const token = jwt.sign(
-        { id: agent.id, hostname: agent.hostname },
-        process.env.JWT_SECRET || "default_secret",
-         { expiresIn: "10d" }
+      { id: agent.id, hostname: agent.hostname },
+      process.env.JWT_SECRET || "default_secret",
+      { expiresIn: "10d" },
     );
 
     res.status(200).json({ message: "Verified", token });
-
   } catch (error) {
     res
       .status(500)
@@ -442,7 +426,6 @@ if(!apiKeyRecord.agent){
     console.error(error);
   }
 };
-
 
 export const agentController = {
   register,

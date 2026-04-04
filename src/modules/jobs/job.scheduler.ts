@@ -6,6 +6,8 @@ interface ScheduleJobOptions {
   scheduleAt?: Date;
   repeatCron?: string | null;
   isRecurring?: boolean;
+  attempt?: number;
+  delayMs?: number;
 }
 
 export class JobScheduler {
@@ -16,11 +18,12 @@ export class JobScheduler {
    * - Recurring: Add with cron pattern
    */
   static async scheduleJob(options: ScheduleJobOptions): Promise<string> {
-    const { jobDefinitionId, agentId, scheduleAt, repeatCron, isRecurring } = options;
+    const { jobDefinitionId, agentId, scheduleAt, repeatCron, isRecurring, attempt, delayMs } = options;
 
     const jobData = {
       jobDefinitionId,
       agentId,
+      attempt,
     };
 
     // Recurring job with cron pattern
@@ -39,9 +42,9 @@ export class JobScheduler {
       return `recurring-${jobDefinitionId}`;
     }
 
-    // Scheduled job (future execution)
-    if (scheduleAt && scheduleAt > new Date()) {
-      const delay = scheduleAt.getTime() - Date.now();
+    // Scheduled job or delayed retry
+    if ((scheduleAt && scheduleAt > new Date()) || delayMs) {
+      const delay = delayMs || (scheduleAt ? scheduleAt.getTime() - Date.now() : 0);
       const job = await jobQueue.add(
         `job-${jobDefinitionId}`,
         jobData,
@@ -50,7 +53,7 @@ export class JobScheduler {
           jobId: `scheduled-${jobDefinitionId}-${Date.now()}`,
         }
       );
-      console.log(`⏰ Job scheduled for ${scheduleAt.toISOString()} (delay: ${delay}ms)`);
+      console.log(`⏰ Job scheduled for execution with delay: ${delay}ms`);
       return job.id || `scheduled-${jobDefinitionId}`;
     }
 

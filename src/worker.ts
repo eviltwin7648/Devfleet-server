@@ -13,6 +13,7 @@ JobDispatcher.initialize();
 interface JobData {
   jobDefinitionId: string;
   agentId?: string;
+  attempt?: number;
 }
 
 // Create the worker
@@ -21,40 +22,31 @@ const worker = new Worker<JobData>(
   async (job: Job<JobData>) => {
     console.log(`🔄 Processing job: ${job.id}`, job.data);
 
-    const { jobDefinitionId, agentId } = job.data;
+    const { jobDefinitionId, agentId, attempt } = job.data;
 
     try {
-      // Fetch the job definition
-      const jobDefinition = await db.jobDefinition.findUnique({
-        where: { id: jobDefinitionId },
-      });
-
-      if (!jobDefinition) {
-        throw new Error(`JobDefinition ${jobDefinitionId} not found`);
-      }
-
-      // Create a new JobExecution record
+      // // Create a new JobExecution record
       const execution = await db.jobExecution.create({
         data: {
           jobId: jobDefinitionId,
           agentId: agentId || null,
-          attempt: 1,
-          status: agentId ? "DISPATCHED" : "CREATED",
+          attempt: attempt || 1,
+          status: "READY",
           scheduledAt: new Date(),
         },
       });
 
       console.log(
-        `✅ Created JobExecution ${execution.id} for JobDefinition ${jobDefinitionId}`
+        `✅ Created JobExecution ${execution.id} for JobDefinition ${jobDefinitionId}`,
       );
 
       // Publish job:created event for waiting agents
-      await JobDispatcher.publish(JobEvent.CREATED, {
-        executionId: execution.id,
-        jobDefinitionId: jobDefinitionId,
-        agentId: agentId,
-        status: execution.status,
-      });
+      // await JobDispatcher.publish(JobEvent.CREATED, {
+      //   executionId: execution.id,
+      //   jobDefinitionId: jobDefinitionId,
+      //   agentId: agentId,
+      //   status: execution.status,
+      // });
 
       return { executionId: execution.id, status: "success" };
     } catch (error) {
@@ -65,7 +57,7 @@ const worker = new Worker<JobData>(
   {
     connection,
     concurrency: 10, // Process up to 10 jobs concurrently
-  }
+  },
 );
 
 // Worker event listeners
