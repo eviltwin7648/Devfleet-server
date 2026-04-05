@@ -105,6 +105,7 @@ model LogChunk {
   type         LogType
   content      String
   createdAt    DateTime @default(now())
+  timestamp    DateTime
   @@unique([executionId, seq])
 }
 

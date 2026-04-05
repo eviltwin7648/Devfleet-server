@@ -13,11 +13,13 @@ const streamLogs = async (req: Request, res: Response) => {
 
   LogStreamManager.subscribe(executionId, res);
 
-  const logs = db.logChunk.findMany({
+  const logs = await db.logChunk.findMany({
     where: { executionId },
     orderBy: [{ batchSeq: "asc" }, { seq: "asc" }],
   });
 
+  console.log("LOGS TYPE:", typeof logs);
+  console.log("LOGS VALUE:", logs);
   res.write(`data: ${JSON.stringify(logs)}\n\n`);
   req.on("close", () => {
     LogStreamManager.unsubscribe(executionId, res);

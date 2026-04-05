@@ -216,40 +216,41 @@ const jobResult = async (req: Request, res: Response) => {
 
     // Handle Retries
     if (execution.status === "FAILED" || execution.status === "TIMEOUT") {
-      if (execution.attempt < execution.job.maxRetries) {
-        console.log(
-          `🔄 Retrying job ${execution.jobId} (Attempt ${execution.attempt + 1}/${execution.job.maxRetries})`,
-        );
-        const delayMs = 2000 * Math.pow(2, execution.attempt - 1);
-        const { JobScheduler } = await import("../jobs/job.scheduler");
-        await JobScheduler.scheduleJob({
-          jobDefinitionId: execution.jobId,
-          agentId: execution.agentId || undefined,
-          attempt: execution.attempt + 1,
-          delayMs: delayMs,
-        });
-      }
+      console.log("JOB FAILED");
+      // if (execution.attempt < execution.job.maxRetries) {
+      //   console.log(
+      //     `🔄 Retrying job ${execution.jobId} (Attempt ${execution.attempt + 1}/${execution.job.maxRetries})`,
+      //   );
+      //   const delayMs = 2000 * Math.pow(2, execution.attempt - 1);
+      //   const { JobScheduler } = await import("../jobs/job.scheduler");
+      //   await JobScheduler.scheduleJob({
+      //     jobDefinitionId: execution.jobId,
+      //     agentId: execution.agentId || undefined,
+      //     attempt: execution.attempt + 1,
+      //     delayMs: delayMs,
+      //   });
+      // }
     }
 
-    if (stdout) {
-      await db.log.create({
-        data: {
-          executionId: executionId,
-          type: "STDOUT",
-          message: stdout,
-        },
-      });
-    }
+    // if (stdout) {
+    //   await db.log.create({
+    //     data: {
+    //       executionId: executionId,
+    //       type: "STDOUT",
+    //       message: stdout,
+    //     },
+    //   });
+    // }
 
-    if (stderr) {
-      await db.log.create({
-        data: {
-          executionId: executionId,
-          type: "STDERR",
-          message: stderr,
-        },
-      });
-    }
+    // if (stderr) {
+    //   await db.log.create({
+    //     data: {
+    //       executionId: executionId,
+    //       type: "STDERR",
+    //       message: stderr,
+    //     },
+    //   });
+    // }
 
     res.status(200).json({ message: "Job result received" });
   } catch (err) {

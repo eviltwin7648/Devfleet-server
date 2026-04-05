@@ -34,11 +34,14 @@ export class LogIngestor {
         seq: log.sequence,
         type: log.type,
         content: log.content,
-        timestamp: log.timestamp,
+        timestamp: new Date(log.timestamp),
       };
     });
-
+    console.log("ingesting logs");
     await db.logChunk.createMany({ data: rows });
+    //publish to the log stream manager. it will send the current batch
+    //  of logs to the required client.
+
     LogStreamManager.publish(executionId, logBatch);
   }
 }

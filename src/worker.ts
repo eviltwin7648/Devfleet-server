@@ -1,10 +1,9 @@
+import dotenv from "dotenv";
+dotenv.config();
 import { Worker, Job } from "bullmq";
 import { connection } from "./lib/queue";
 import { db } from "./db/db";
 import { JobDispatcher, JobEvent } from "./lib/jobDispatcher";
-import dotenv from "dotenv";
-
-dotenv.config();
 
 // Initialize JobDispatcher
 JobDispatcher.initialize();
