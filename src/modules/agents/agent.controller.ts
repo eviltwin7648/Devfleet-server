@@ -34,7 +34,7 @@ const parseRangeHours = (range?: string) => {
 // Register a new agent or update existing
 const register = async (req: Request, res: Response) => {
   try {
-    const { hostname, os, arch, totalmem, apiKey } = req.body;
+    const { agent_id, hostname, os, arch, totalmem, apiKey } = req.body;
     console.log("Regestring agent:", req.body);
 
     const normalizedHost = hostname.trim().toLowerCase();
@@ -65,7 +65,7 @@ const register = async (req: Request, res: Response) => {
     }
     // Upsert agent by hostname (or other unique field)
     const agent = await db.agent.upsert({
-      where: { hostname: normalizedHost },
+      where: { id: agent_id },
       update: {
         os,
         arch,
@@ -74,6 +74,7 @@ const register = async (req: Request, res: Response) => {
         apiKeyId: apiKeyRecord.id,
       },
       create: {
+        id: agent_id,
         hostname: normalizedHost,
         os,
         arch,

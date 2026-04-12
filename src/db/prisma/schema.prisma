@@ -38,8 +38,8 @@ model emailOtp {
 }
 
 model Agent {
-  id            String          @id @default(uuid())
-  hostname      String          @unique
+  id            String          @id @default(uuid()) @unique
+  hostname      String          
   os            String
   arch          String          //cpu architecture
   totalmem      BigInt
