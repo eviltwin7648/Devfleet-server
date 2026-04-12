@@ -1,6 +1,36 @@
 import crypto from "crypto";
 import { Request, Response } from "express";
 import { db } from "../../db/db";
+
+const agentSelect = {
+  id: true,
+  hostname: true,
+  os: true,
+  arch: true,
+  totalmem: true,
+  isOnline: true,
+  lastSeen: true,
+} as const;
+
+const latestHealthSelect = {
+  cpuUsage: true,
+  memUsage: true,
+  diskUsage: true,
+  timestamp: true,
+} as const;
+
+const parseRangeHours = (range?: string) => {
+  switch (range) {
+    case "24h":
+      return 24;
+    case "7d":
+      return 24 * 7;
+    case "30d":
+      return 24 * 30;
+    default:
+      return 24;
+  }
+};
 // Register a new agent or update existing
 const register = async (req: Request, res: Response) => {
   try {
@@ -110,14 +140,15 @@ const heartbeat = async (req: Request, res: Response) => {
   }
 };
 
-// Poll for jobs assigned to this agent (with long-polling support)
+// Poll for jobs assigned to this agent (with long-polling)
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 const pullJobs = async (req: Request, res: Response) => {
   try {
     const agentId = req.agent?.id;
     if (!agentId) {
-      return res.status(401).json({ message: "Unauthorized" });
+      res.status(401).json({ message: "Unauthorized" });
+      return;
     }
 
     const findAndClaimJob = async () => {
@@ -159,23 +190,23 @@ const pullJobs = async (req: Request, res: Response) => {
       const execution = await findAndClaimJob();
 
       if (execution) {
-        return res.status(200).json({ job: execution });
+        res.status(200).json({ job: execution });
+        return;
       }
 
       await sleep(800 + Math.random() * 400);
     }
 
-    return res.status(200).json({ job: null });
+    res.status(200).json({ job: null });
   } catch (err) {
     console.error(err);
-    return res.status(500).json({
+    res.status(500).json({
       message: "Failed to pull jobs",
       error: String(err),
     });
   }
 };
 
-import { broadcastLogs } from "../../lib/ws";
 import { LogIngestor } from "../logs/logIngestion.Service";
 
 // Receive job logs from agent (batch support)
@@ -353,23 +384,139 @@ const getUserAgents = async (req: Request, res: Response) => {
         userId,
       },
       select: {
-        id: true,
-        hostname: true,
-        os: true,
-        arch: true,
-        isOnline: true,
-        lastSeen: true,
+        ...agentSelect,
+        agentHealth: {
+          orderBy: { timestamp: "desc" },
+          take: 1,
+          select: latestHealthSelect,
+        },
       },
+      orderBy: [{ isOnline: "desc" }, { lastSeen: "desc" }],
     });
 
     res.json({
       message: "Agents Found Successfully",
-      agents,
+      agents: agents.map(serializeAgent),
     });
   } catch (error) {
     res
       .status(500)
       .json({ message: "Failed to Fetch Agents", error: String(error) });
+    console.error(error);
+  }
+};
+function serializeAgent(agent: any) {
+  return {
+    ...agent,
+    totalmem: agent.totalmem.toString(), // 👈 key fix
+    latestHealth: agent.agentHealth?.[0] || null,
+    agentHealth: undefined,
+  };
+}
+const getAgent = async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { id } = req.params;
+    if (!userId) {
+      res.status(400).json({ message: "Missing user Id" });
+      return;
+    }
+
+    const agent = await db.agent.findFirst({
+      where: {
+        id,
+        userId,
+      },
+      select: {
+        ...agentSelect,
+        jobExecutions: {
+          select: {
+            id: true,
+          },
+        },
+        agentHealth: {
+          orderBy: { timestamp: "desc" },
+          take: 1,
+          select: latestHealthSelect,
+        },
+      },
+    });
+
+    if (!agent) {
+      res.status(404).json({ message: "Agent not found" });
+      return;
+    }
+
+    res.json({
+      message: "Agent Found Successfully",
+      agent: serializeAgent(agent),
+    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ message: "Failed to Fetch Agent", error: String(error) });
+    console.error(error);
+  }
+};
+
+const getAgentHealthHistory = async (req: Request, res: Response) => {
+  try {
+    const userId = req.user?.id;
+    const { id } = req.params;
+    const range = typeof req.query.range === "string" ? req.query.range : "24h";
+
+    if (!userId) {
+      res.status(400).json({ message: "Missing user Id" });
+      return;
+    }
+
+    const agent = await db.agent.findFirst({
+      where: {
+        id,
+        userId,
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (!agent) {
+      res.status(404).json({ message: "Agent not found" });
+      return;
+    }
+
+    const from = new Date(Date.now() - parseRangeHours(range) * 60 * 60 * 1000);
+    const history = await db.agentHealth.findMany({
+      where: {
+        agentId: id,
+        timestamp: {
+          gte: from,
+        },
+      },
+      orderBy: {
+        timestamp: "asc",
+      },
+      select: {
+        id: true,
+        cpuUsage: true,
+        memUsage: true,
+        diskUsage: true,
+        timestamp: true,
+      },
+    });
+
+    res.json({
+      message: "Agent health history fetched successfully",
+      range,
+      from,
+      to: new Date(),
+      history,
+    });
+  } catch (error) {
+    res.status(500).json({
+      message: "Failed to Fetch Agent Health History",
+      error: String(error),
+    });
     console.error(error);
   }
 };
@@ -437,6 +584,8 @@ export const agentController = {
   shutdown,
   createApiKey,
   getUserAgents,
+  getAgent,
+  getAgentHealthHistory,
   verifyAgent,
   // pollJobs
 };

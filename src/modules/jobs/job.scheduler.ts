@@ -18,7 +18,15 @@ export class JobScheduler {
    * - Recurring: Add with cron pattern
    */
   static async scheduleJob(options: ScheduleJobOptions): Promise<string> {
-    const { jobDefinitionId, agentId, scheduleAt, repeatCron, isRecurring, attempt, delayMs } = options;
+    const {
+      jobDefinitionId,
+      agentId,
+      scheduleAt,
+      repeatCron,
+      isRecurring,
+      attempt,
+      delayMs,
+    } = options;
 
     const jobData = {
       jobDefinitionId,
@@ -28,43 +36,32 @@ export class JobScheduler {
 
     // Recurring job with cron pattern
     if (isRecurring && repeatCron) {
-      await jobQueue.add(
-        `job-${jobDefinitionId}`,
-        jobData,
-        {
-          repeat: {
-            pattern: repeatCron,
-          },
-          jobId: `recurring-${jobDefinitionId}`, // Unique ID for recurring jobs
-        }
-      );
+      await jobQueue.add(`job-${jobDefinitionId}`, jobData, {
+        repeat: {
+          pattern: repeatCron,
+        },
+        jobId: `recurring-${jobDefinitionId}`, // Unique ID for recurring jobs
+      });
       console.log(`📅 Recurring job scheduled with cron: ${repeatCron}`);
       return `recurring-${jobDefinitionId}`;
     }
 
     // Scheduled job or delayed retry
     if ((scheduleAt && scheduleAt > new Date()) || delayMs) {
-      const delay = delayMs || (scheduleAt ? scheduleAt.getTime() - Date.now() : 0);
-      const job = await jobQueue.add(
-        `job-${jobDefinitionId}`,
-        jobData,
-        {
-          delay,
-          jobId: `scheduled-${jobDefinitionId}-${Date.now()}`,
-        }
-      );
+      const delay =
+        delayMs || (scheduleAt ? scheduleAt.getTime() - Date.now() : 0);
+      const job = await jobQueue.add(`job-${jobDefinitionId}`, jobData, {
+        delay,
+        jobId: `scheduled-${jobDefinitionId}-${Date.now()}`,
+      });
       console.log(`⏰ Job scheduled for execution with delay: ${delay}ms`);
       return job.id || `scheduled-${jobDefinitionId}`;
     }
 
     // Immediate execution
-    const job = await jobQueue.add(
-      `job-${jobDefinitionId}`,
-      jobData,
-      {
-        jobId: `immediate-${jobDefinitionId}-${Date.now()}`,
-      }
-    );
+    const job = await jobQueue.add(`job-${jobDefinitionId}`, jobData, {
+      jobId: `immediate-${jobDefinitionId}-${Date.now()}`,
+    });
     console.log(`🚀 Job added for immediate execution`);
     return job.id || `immediate-${jobDefinitionId}`;
   }

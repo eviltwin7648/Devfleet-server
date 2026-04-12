@@ -196,10 +196,91 @@ const deleteJob = async (req: Request, res: Response) => {
   }
 };
 
+const getJobExecutions = async (req: Request, res: Response) => {
+  try {
+    const jobDefinitionId = req.params.jobDefinitionId;
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    const executions = await db.jobExecution.findMany({
+      where: {
+        jobId: jobDefinitionId,
+        job: { userId },
+      },
+      include: {
+        agent: {
+          select: { id: true, hostname: true, os: true, arch: true, isOnline: true, lastSeen: true },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    res.status(200).json({ message: "Executions found", data: executions });
+  } catch (error) {
+    console.error("Error listing executions:", error);
+    res.status(500).json({ error: "Failed to list executions" });
+  }
+};
+
+const reRunJob = async (req: Request, res: Response) => {
+  try {
+    const { executionId } = req.params;
+    const userId = req.user?.id;
+    if (!userId) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+
+    // Look up the original execution to get the job definition
+    const originalExecution = await db.jobExecution.findUnique({
+      where: { id: executionId },
+      include: { job: true },
+    });
+
+    if (!originalExecution) {
+      res.status(404).json({ message: "Execution not found" });
+      return;
+    }
+    if (originalExecution.job.userId !== userId) {
+      res.status(403).json({ message: "Forbidden" });
+      return;
+    }
+
+    // Count existing executions to determine next attempt number
+    const attemptCount = await db.jobExecution.count({
+      where: { jobId: originalExecution.jobId },
+    });
+
+    const newExecution = await db.jobExecution.create({
+      data: {
+        jobId: originalExecution.jobId,
+        agentId: originalExecution.agentId || null,
+        attempt: attemptCount + 1,
+        status: "READY",
+        scheduledAt: new Date(),
+      },
+    });
+
+    res.status(201).json({
+      message: "Job re-queued successfully",
+      data: newExecution,
+    });
+  } catch (error) {
+    console.error("Error re-running job:", error);
+    res.status(500).json({ error: "Failed to re-run job" });
+  }
+};
+
 export const jobController = {
   createJob,
   getJobs,
   getJob,
   updateJob,
   deleteJob,
+  getJobExecutions,
+  reRunJob,
 };
+

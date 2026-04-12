@@ -17,8 +17,9 @@ router.get("/api-key", userAuth, agentController.createApiKey);
 
 //dashboard
 router.get("/my-agents", userAuth, agentController.getUserAgents);
+router.get("/:id/health", userAuth, agentController.getAgentHealthHistory);
+router.get("/:id", userAuth, agentController.getAgent);
 
 
 
 export const agentRoutes = router;
-

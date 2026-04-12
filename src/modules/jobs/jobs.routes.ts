@@ -7,6 +7,12 @@ const router = Router();
 router.post("/create", userAuth, jobController.createJob);
 router.get("/all", userAuth, jobController.getJobs);
 router.get("/get/:jobId", userAuth, jobController.getJob);
+router.get(
+  "/definition/:jobDefinitionId/executions",
+  userAuth,
+  jobController.getJobExecutions,
+);
+router.post("/execution/:executionId/rerun", userAuth, jobController.reRunJob);
 router.put("/update/:jobId", userAuth, jobController.updateJob);
 router.delete("/delete/:jobId", userAuth, jobController.deleteJob);
 
